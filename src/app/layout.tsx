@@ -1,8 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
-import DisclaimerBanner from '../components/DisclaimerBanner';
-
-import Script from 'next/script';
+import GA from '@/components/GA';
+import DisclaimerBanner from '@/components/DisclaimerBanner';
 
 export const metadata: Metadata = {
   title: 'My Baby Gender Predictor',
@@ -12,34 +11,11 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const gaId = process.env.NEXT_PUBLIC_GA_ID;
-
+  const gaId = process.env.NEXT_PUBLIC_GA_ID; // exposed at build time
   return (
     <html lang="en">
-      <head>
-        {/* Google Analytics */}
-        {gaId && (
-          <>
-            <Script
-              strategy="afterInteractive"
-              src={`https://www.googletagmanager.com/gtag/js?id=${gaId}`}
-            />
-            <Script
-              id="ga-init"
-              strategy="afterInteractive"
-              dangerouslySetInnerHTML={{
-                __html: `
-                  window.dataLayer = window.dataLayer || [];
-                  function gtag(){dataLayer.push(arguments);}
-                  gtag('js', new Date());
-                  gtag('config', '${gaId}');
-                `,
-              }}
-            />
-          </>
-        )}
-      </head>
       <body>
+        <GA id={gaId} />
         <DisclaimerBanner />
         {children}
       </body>
