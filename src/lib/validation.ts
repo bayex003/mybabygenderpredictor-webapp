@@ -1,22 +1,39 @@
-export type ValidationResult =
-  | { ok: true; label: 'ultrasound_side'; score: number }
-  | { ok: false; label: 'ultrasound_front_back' | 'not_ultrasound' | 'blurry'; score: number; reason: string };
+// src/lib/validation.ts
 
-export async function validateUltrasound(file: File): Promise<ValidationResult> {
-  const url = process.env.NEXT_PUBLIC_VALIDATOR_URL || '/api/validate';
-  const fd = new FormData();
-  fd.append('file', file);
-  const res = await fetch(url, { method: 'POST', body: fd });
-  if (!res.ok) return { ok: false, label: 'not_ultrasound', score: 0, reason: 'Validator error' };
+/**
+ * Server/validator verdict for uploads.
+ * We keep label as a generic string so TS doesn't clash with UI result types.
+ */
+export type ValidatorVerdict = {
+  ok: boolean;
+  /**
+   * e.g. 'ultrasound_side' | 'front_back' | 'not_ultrasound' | 'blurry' | ...
+   * Keep this permissive because the backend may evolve.
+   */
+  label: string;
+  /** 0..1 heuristic confidence coming from the validator */
+  score: number;
+  /** Human-friendly reason/explanation */
+  reason: string;
+};
 
-  const data = await res.json();
-  const label = (data.label ?? 'not_ultrasound') as ValidationResult['label'];
-  const score = Number(data.score ?? 0);
-  if (label === 'ultrasound_side' && score >= 0.7) return { ok: true, label, score };
+/** Helper to construct a failing verdict with a sensible default reason */
+export function fail(
+  label: string,
+  score = 0,
+  reason?: string
+): ValidatorVerdict {
+  const fallback =
+    label === 'blurry'
+      ? 'Image appears blurry.'
+      : 'This does not look like an ultrasound.';
+  return { ok: false, label, score, reason: reason ?? fallback };
+}
 
-  const reason =
-    label === 'ultrasound_front_back' ? 'Side profile not detected.' :
-    label === 'blurry' ? 'Image appears blurry.' :
-    'This does not look like an ultrasound.';
-  return { ok: false, label, score, reason };
+/** Helper to construct a passing verdict */
+export function pass(
+  score: number,
+  reason = 'Valid ultrasound side-profile image.'
+): ValidatorVerdict {
+  return { ok: true, label: 'ultrasound_side', score, reason };
 }
