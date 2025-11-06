@@ -151,7 +151,7 @@ export default function Page() {
 
         <div className="mx-auto max-w-3xl">
           {/* If your Dropzone supports maxSize, keep it. Adjust as you like. */}
-          <Dropzone onValid={handleValid} onInvalid={handleInvalid} maxSize={8 * 1024 * 1024} />
+          <Dropzone onValid={handleValid} onInvalid={handleInvalid} maxSizeMB={8} />
           {processing && <div className="mt-3 text-sm text-gray-600">Processing…</div>}
         </div>
       </section>
