@@ -150,7 +150,6 @@ export default function Page() {
         )}
 
         <div className="mx-auto max-w-3xl">
-          {/* If your Dropzone supports maxSize, keep it. Adjust as you like. */}
           <Dropzone onValid={handleValid} onInvalid={handleInvalid} maxSizeMB={8} />
           {processing && <div className="mt-3 text-sm text-gray-600">Processing…</div>}
         </div>
@@ -246,19 +245,19 @@ async function safeMessage(resp: Response): Promise<string | null> {
 
 /** ── Helpers for content-based validation & preprocessing ───────────────── */
 
-/** Load with EXIF orientation applied when possible */
+/** Load image safely (no experimental options) */
 async function loadImageOriented(file: File): Promise<HTMLImageElement> {
-  // Modern path: createImageBitmap can respect EXIF with imageOrientation
+  // Modern path: createImageBitmap (widely supported)
   if ('createImageBitmap' in window) {
     try {
-      // @ts-expect-error: imageOrientation is still experimental in some TS libs
-      const bitmap = await createImageBitmap(file as any, { imageOrientation: 'from-image' });
+      const bitmap = await createImageBitmap(file as any);
       const canvas = document.createElement('canvas');
       canvas.width = bitmap.width;
       canvas.height = bitmap.height;
       const ctx = canvas.getContext('2d')!;
       ctx.drawImage(bitmap, 0, 0);
       const url = canvas.toDataURL('image/jpeg', 0.92);
+
       const img = new Image();
       await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve();
@@ -267,10 +266,11 @@ async function loadImageOriented(file: File): Promise<HTMLImageElement> {
       });
       return img;
     } catch {
-      // fall back below
+      // fall through to legacy path
     }
   }
-  // Legacy path (may ignore EXIF on some browsers)
+
+  // Legacy path
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -279,7 +279,7 @@ async function loadImageOriented(file: File): Promise<HTMLImageElement> {
   });
 }
 
-/** Downscale to MAX_SIDE while keeping aspect ratio, returned as an <img>-like via canvas */
+/** Downscale to MAX_SIDE while keeping aspect ratio */
 function imageFitToMaxSide(image: HTMLImageElement, maxSide: number): HTMLCanvasElement {
   const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
   const w = Math.max(1, Math.round(image.width * scale));
