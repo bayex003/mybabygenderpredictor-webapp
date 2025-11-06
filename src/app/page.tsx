@@ -8,17 +8,21 @@ import TrustBadges from '../components/TrustBadges';
 
 type Result = { label: 'boy' | 'girl' | 'uncertain'; confidence: number };
 
+// --- Performance knobs ---
+const MAX_SIDE = 1024; // downscale longest side before upload (768–1280 are fine)
+const VALIDATOR_SIZE = 128; // speed up heuristic validator (was 160)
+const EDGE_THRESHOLD = 0.015; // lower = more permissive, higher = stricter (try 0.012–0.02)
+
 export default function Page() {
   const [result, setResult] = useState<Result | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
 
-  // Expose an opener for the “Upload Scan”/“Get started” buttons in the page/nav
+  // Expose an opener for “Upload Scan”/“Get started” buttons
   useEffect(() => {
     (window as any).openUpload = () => {
       document.getElementById('upload')?.scrollIntoView({ behavior: 'smooth' });
-      // Optionally focus the hidden file input if your Dropzone exposes it
     };
   }, []);
 
@@ -28,61 +32,53 @@ export default function Page() {
     return 'This is a playful guess. Results may vary.';
   }, [result]);
 
-  /** Deterministic playful guess so it doesn’t change between tries */
-  const playfulGuess = (file: File, conf: number): Result => {
-    // Simple deterministic seed from file name + size.
-    // Even/odd decides boy/girl, keeps it stable for the same file.
-    const seed = (file.name.length + Number(file.size % 97)) % 2;
-    const label = seed === 0 ? 'boy' : 'girl';
-    return { label, confidence: Math.max(0, Math.min(1, conf)) };
-  };
-
   /** Called when Dropzone validates the file locally */
   const handleValid = async (file: File) => {
     setBanner(null);
     setProcessing(true);
-
     try {
-      const endpoint =
-        process.env.NEXT_PUBLIC_VALIDATOR_URL ||
-        ''; // If empty you’ll immediately fall into catch (bad config)
+      // 1) Load into an oriented <img> so client-side processing uses the right rotation
+      const img = await loadImageOriented(file);
 
-      const fd = new FormData();
-      fd.append('file', file);
+      // 2) Content-based validation (ultrasound-like texture)
+      const looksLikeScan = await validateUltrasound(img);
+      if (!looksLikeScan) {
+        setBanner("This doesn't appear to be a baby scan. Please upload a clearer ultrasound image.");
+        return;
+      }
 
-      const resp = await fetch(endpoint, {
+      // 3) Normalize client-side: downscale + convert to grayscale
+      const grayDataUrl = await toGrayscale(imageFitToMaxSide(img, MAX_SIDE));
+
+      // 4) Call server model
+      const resp = await fetch('/api/predict', {
         method: 'POST',
-        body: fd,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: grayDataUrl }),
       });
-
       if (!resp.ok) {
-        // Validator rejected (400) or other non-2xx
         const detail = await safeMessage(resp);
-        throw new Error(detail || 'Validation failed.');
+        throw new Error(detail || 'Prediction failed.');
       }
 
-      const data = await resp.json();
-      // Expected from your FastAPI: { status: 'ok', label: 'ultrasound_side', confidence, message }
-      if (data?.status !== 'ok') {
-        throw new Error('Unexpected response from validator.');
-      }
+      const data = (await resp.json()) as Result;
 
-      // Turn a valid ultrasound into a playful boy/girl guess (deterministic)
-      const res = playfulGuess(file, Number(data?.confidence ?? 0.5));
-      setResult(res);
+      // Optional mapping: treat very low confidence as uncertain
+      const normalized: Result =
+        data.confidence < 0.55 ? { label: 'uncertain', confidence: data.confidence } : data;
+
+      setResult(normalized);
       setIsOpen(true);
     } catch (err: any) {
       console.error('[upload] error:', err);
-      setBanner(err?.message || 'Network error. Please try again.');
+      setBanner(err?.message || 'Something went wrong. Please try again.');
     } finally {
       setProcessing(false);
     }
   };
 
   /** Called when Dropzone fails basic client checks (type/size/etc) */
-  const handleInvalid = (msg: string) => {
-    setBanner(msg);
-  };
+  const handleInvalid = (msg: string) => setBanner(msg);
 
   const handleResultClose = () => setIsOpen(false);
 
@@ -154,10 +150,9 @@ export default function Page() {
         )}
 
         <div className="mx-auto max-w-3xl">
-          <Dropzone onValid={handleValid} onInvalid={handleInvalid} />
-          {processing && (
-            <div className="mt-3 text-sm text-gray-600">Processing…</div>
-          )}
+          {/* If your Dropzone supports maxSize, keep it. Adjust as you like. */}
+          <Dropzone onValid={handleValid} onInvalid={handleInvalid} maxSize={8 * 1024 * 1024} />
+          {processing && <div className="mt-3 text-sm text-gray-600">Processing…</div>}
         </div>
       </section>
 
@@ -189,32 +184,6 @@ export default function Page() {
         </div>
       </section>
 
-      {/* WHY US */}
-      <section id="why-us" className="mx-auto max-w-6xl px-4 py-16 text-center">
-        <h2 className="text-3xl font-semibold mb-2">Why People Use This</h2>
-        <p className="text-gray-600 mb-10">Fun, fast, and privacy-friendly.</p>
-        <div className="grid md:grid-cols-3 gap-8">
-          <div className="bg-white rounded-2xl shadow-soft p-8">
-            <h3 className="text-lg font-semibold mb-2 text-[#5EAaff]">Playful</h3>
-            <p className="text-gray-600">
-              A light-hearted way to share your excitement with friends and family.
-            </p>
-          </div>
-          <div className="bg-white rounded-2xl shadow-soft p-8">
-            <h3 className="text-lg font-semibold mb-2 text-[#9B80FF]">Private</h3>
-            <p className="text-gray-600">
-              No accounts. No storage. Your image is handled transiently.
-            </p>
-          </div>
-          <div className="bg-white rounded-2xl shadow-soft p-8">
-            <h3 className="text-lg font-semibold mb-2 text-[#FF7BC8]">Instant</h3>
-            <p className="text-gray-600">
-              Upload a scan and get a playful guess in seconds.
-            </p>
-          </div>
-        </div>
-      </section>
-
       {/* RESULT MODAL */}
       <Modal isOpen={isOpen} onClose={handleResultClose}>
         {result ? (
@@ -224,13 +193,16 @@ export default function Page() {
               {result.label === 'uncertain' ? (
                 <>Uncertain this time — try another scan if you have one.</>
               ) : (
-                <>Looks like{' '}
+                <>
+                  Looks like{' '}
                   <b className={result.label === 'boy' ? 'text-blue-600' : 'text-pink-600'}>
                     {result.label}
-                  </b>!
+                  </b>
+                  !
                 </>
               )}
             </p>
+            <p className="mt-2 text-sm text-gray-600">{confidenceText}</p>
             <p className="mt-2 text-sm text-gray-600">
               Confidence: {Math.round((result.confidence ?? 0) * 100)}%
             </p>
@@ -263,11 +235,113 @@ async function safeMessage(resp: Response): Promise<string | null> {
     const ct = resp.headers.get('content-type') || '';
     if (ct.includes('application/json')) {
       const j = await resp.json().catch(() => null);
-      return j?.detail || j?.message || null;
+      return (j as any)?.detail || (j as any)?.message || null;
     }
     const t = await resp.text().catch(() => '');
     return t || null;
   } catch {
     return null;
   }
+}
+
+/** ── Helpers for content-based validation & preprocessing ───────────────── */
+
+/** Load with EXIF orientation applied when possible */
+async function loadImageOriented(file: File): Promise<HTMLImageElement> {
+  // Modern path: createImageBitmap can respect EXIF with imageOrientation
+  if ('createImageBitmap' in window) {
+    try {
+      // @ts-expect-error: imageOrientation is still experimental in some TS libs
+      const bitmap = await createImageBitmap(file as any, { imageOrientation: 'from-image' });
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(bitmap, 0, 0);
+      const url = canvas.toDataURL('image/jpeg', 0.92);
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+        img.src = url;
+      });
+      return img;
+    } catch {
+      // fall back below
+    }
+  }
+  // Legacy path (may ignore EXIF on some browsers)
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/** Downscale to MAX_SIDE while keeping aspect ratio, returned as an <img>-like via canvas */
+function imageFitToMaxSide(image: HTMLImageElement, maxSide: number): HTMLCanvasElement {
+  const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+  const w = Math.max(1, Math.round(image.width * scale));
+  const h = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(image, 0, 0, w, h);
+  return canvas;
+}
+
+/** Convert an <img> or canvas to grayscale DataURL (JPEG) */
+async function toGrayscale(imgOrCanvas: HTMLImageElement | HTMLCanvasElement): Promise<string> {
+  const w = (imgOrCanvas as HTMLCanvasElement).width || (imgOrCanvas as HTMLImageElement).naturalWidth || (imgOrCanvas as HTMLImageElement).width;
+  const h = (imgOrCanvas as HTMLCanvasElement).height || (imgOrCanvas as HTMLImageElement).naturalHeight || (imgOrCanvas as HTMLImageElement).height;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(imgOrCanvas as any, 0, 0, w, h);
+
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    d[i] = d[i + 1] = d[i + 2] = y;
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/jpeg', 0.9);
+}
+
+/** Ultrasound-like heuristic: edge density on a small grayscale downscale */
+async function validateUltrasound(image: HTMLImageElement): Promise<boolean> {
+  const w = VALIDATOR_SIZE, h = VALIDATOR_SIZE;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  canvas.width = w; canvas.height = h;
+  ctx.drawImage(image, 0, 0, w, h);
+
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const data = imgData.data;
+
+  // quick grayscale in-place
+  for (let i = 0; i < data.length; i += 4) {
+    const y = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    data[i] = data[i + 1] = data[i + 2] = y;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  // simple gradient-based edge count
+  const lumAt = (x: number, y: number) => data[(y * w + x) * 4];
+  let edges = 0;
+  for (let yy = 0; yy < h - 1; yy++) {
+    for (let xx = 0; xx < w - 1; xx++) {
+      const a = lumAt(xx, yy);
+      const b = lumAt(xx + 1, yy);
+      const c = lumAt(xx, yy + 1);
+      if (Math.abs(a - b) > 20 || Math.abs(a - c) > 20) edges++;
+    }
+  }
+  const edgeDensity = edges / (w * h);
+  return edgeDensity > EDGE_THRESHOLD;
 }
