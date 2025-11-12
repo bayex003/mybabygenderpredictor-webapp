@@ -8,10 +8,10 @@ import TrustBadges from '../components/TrustBadges';
 
 type Result = { label: 'boy' | 'girl' | 'uncertain'; confidence: number };
 
-// --- Performance knobs ---
-const MAX_SIDE = 1024; // downscale longest side before upload (768–1280 are fine)
-const VALIDATOR_SIZE = 128; // speed up heuristic validator (was 160)
-const EDGE_THRESHOLD = 0.015; // lower = more permissive, higher = stricter (try 0.012–0.02)
+// --- Performance + validator knobs ---
+const MAX_SIDE = 1024;      // downscale longest side before upload
+const VALIDATOR_SIZE = 128; // heuristic work size
+const EDGE_THRESHOLD = 0.015; // lower = more permissive
 
 export default function Page() {
   const [result, setResult] = useState<Result | null>(null);
@@ -19,7 +19,6 @@ export default function Page() {
   const [banner, setBanner] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
 
-  // Expose an opener for “Upload Scan”/“Get started” buttons
   useEffect(() => {
     (window as any).openUpload = () => {
       document.getElementById('upload')?.scrollIntoView({ behavior: 'smooth' });
@@ -32,41 +31,54 @@ export default function Page() {
     return 'This is a playful guess. Results may vary.';
   }, [result]);
 
-  /** Called when Dropzone validates the file locally */
+  /** Main upload handler */
   const handleValid = async (file: File) => {
     setBanner(null);
     setProcessing(true);
     try {
-      // 1) Load into an oriented <img> so client-side processing uses the right rotation
+      // 1) Load
       const img = await loadImageOriented(file);
 
-      // 2) Content-based validation (ultrasound-like texture)
+      // 2) Content heuristic
       const looksLikeScan = await validateUltrasound(img);
       if (!looksLikeScan) {
         setBanner("This doesn't appear to be a baby scan. Please upload a clearer ultrasound image.");
         return;
       }
 
-      // 3) Normalize client-side: downscale + convert to grayscale
+      // 3) Normalize (downscale + grayscale)
       const grayDataUrl = await toGrayscale(imageFitToMaxSide(img, MAX_SIDE));
 
-      // 4) Call server model
+      // 4) Compute a stable hash of normalized pixels
+      const ab = await dataURLToArrayBuffer(grayDataUrl);
+      const hash = await sha256Hex(ab);
+
+      // 5) Sticky client cache by image hash
+      const cached = cacheGet(hash);
+      if (cached) {
+        setResult(cached);
+        setIsOpen(true);
+        return;
+      }
+
+      // 6) Call server (send hash too, for future persistence if needed)
       const resp = await fetch('/api/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: grayDataUrl }),
+        body: JSON.stringify({ image: grayDataUrl, hash }),
       });
       if (!resp.ok) {
         const detail = await safeMessage(resp);
         throw new Error(detail || 'Prediction failed.');
       }
 
+      // 7) Uncertain band to avoid boy/girl flip near 50/50
       const data = (await resp.json()) as Result;
-
-      // Optional mapping: treat very low confidence as uncertain
       const normalized: Result =
         data.confidence < 0.55 ? { label: 'uncertain', confidence: data.confidence } : data;
 
+      // 8) Cache + show
+      cacheSet(hash, normalized);
       setResult(normalized);
       setIsOpen(true);
     } catch (err: any) {
@@ -77,14 +89,11 @@ export default function Page() {
     }
   };
 
-  /** Called when Dropzone fails basic client checks (type/size/etc) */
   const handleInvalid = (msg: string) => setBanner(msg);
-
   const handleResultClose = () => setIsOpen(false);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-white via-[#fdfaff] to-[#faf7ff] text-gray-800">
-      {/* NAV */}
       <Nav />
 
       {/* HERO */}
@@ -97,7 +106,6 @@ export default function Page() {
             Upload a clear ultrasound side-profile and get a <b>playful AI-assisted guess</b> in seconds.
             This is an <b>entertainment experience</b>, not a medical service.
           </p>
-
           <div className="mt-6">
             <a
               href="#upload"
@@ -111,7 +119,6 @@ export default function Page() {
               Upload Scan
             </a>
           </div>
-
           <TrustBadges />
           <p className="mt-2 text-xs text-gray-500">Images are processed transiently in memory and not stored.</p>
         </div>
@@ -128,22 +135,17 @@ export default function Page() {
         </div>
       </section>
 
-      {/* UPLOAD SECTION */}
+      {/* UPLOAD */}
       <section id="upload" className="mx-auto max-w-6xl px-4 py-16 text-center">
         <h2 className="text-3xl font-semibold mb-2">Upload Your Ultrasound Scan</h2>
         <p className="text-gray-600 mb-8">
           Use a <b>clear side profile</b> (not front/back). JPG or PNG, up to 8MB.
         </p>
 
-        {/* Retry / error banner */}
         {banner && (
           <div className="mx-auto mb-4 max-w-3xl rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-left text-rose-700 flex items-start justify-between gap-3">
             <span>{banner}</span>
-            <button
-              type="button"
-              className="text-sm font-medium underline"
-              onClick={() => setBanner(null)}
-            >
+            <button type="button" className="text-sm font-medium underline" onClick={() => setBanner(null)}>
               Retry
             </button>
           </div>
@@ -163,21 +165,15 @@ export default function Page() {
           <div className="grid md:grid-cols-3 gap-8">
             <div className="bg-white rounded-2xl shadow-soft p-8">
               <h3 className="text-lg font-semibold mb-2 text-[#9B80FF]">1. Upload</h3>
-              <p className="text-gray-600">
-                Provide a clear ultrasound side-profile (JPG/PNG). We don’t store images.
-              </p>
+              <p className="text-gray-600">Provide a clear ultrasound side-profile (JPG/PNG). We don’t store images.</p>
             </div>
             <div className="bg-white rounded-2xl shadow-soft p-8">
               <h3 className="text-lg font-semibold mb-2 text-[#9B80FF]">2. Process</h3>
-              <p className="text-gray-600">
-                We briefly process the image in memory to produce a fun, AI-assisted guess.
-              </p>
+              <p className="text-gray-600">We briefly process the image in memory to produce a fun, AI-assisted guess.</p>
             </div>
             <div className="bg-white rounded-2xl shadow-soft p-8">
               <h3 className="text-lg font-semibold mb-2 text-[#9B80FF]">3. Result</h3>
-              <p className="text-gray-600">
-                See a playful prediction. If unclear, we’ll say “Uncertain”.
-              </p>
+              <p className="text-gray-600">See a playful prediction. If unclear, we’ll say “Uncertain”.</p>
             </div>
           </div>
         </div>
@@ -194,17 +190,12 @@ export default function Page() {
               ) : (
                 <>
                   Looks like{' '}
-                  <b className={result.label === 'boy' ? 'text-blue-600' : 'text-pink-600'}>
-                    {result.label}
-                  </b>
-                  !
+                  <b className={result.label === 'boy' ? 'text-blue-600' : 'text-pink-600'}>{result.label}</b>!
                 </>
               )}
             </p>
             <p className="mt-2 text-sm text-gray-600">{confidenceText}</p>
-            <p className="mt-2 text-sm text-gray-600">
-              Confidence: {Math.round((result.confidence ?? 0) * 100)}%
-            </p>
+            <p className="mt-2 text-sm text-gray-600">Confidence: {Math.round((result.confidence ?? 0) * 100)}%</p>
             <p className="mt-2 text-xs text-gray-500">Not medical advice.</p>
           </div>
         ) : (
@@ -215,9 +206,7 @@ export default function Page() {
       {/* FOOTER */}
       <footer className="border-t">
         <div className="mx-auto max-w-6xl px-4 py-10 text-sm text-gray-600 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-          <p>
-            © {new Date().getFullYear()} My Baby Gender Predictor — entertainment only · not medical advice.
-          </p>
+          <p>© {new Date().getFullYear()} My Baby Gender Predictor — entertainment only · not medical advice.</p>
           <div className="flex gap-4">
             <a href="/privacy" className="hover:underline">Privacy</a>
             <a href="/terms" className="hover:underline">Terms</a>
@@ -228,7 +217,8 @@ export default function Page() {
   );
 }
 
-/** Helper: pull a useful error message from a non-2xx response */
+/** ── Helpers ───────────────────────────────────────────────────────────── */
+
 async function safeMessage(resp: Response): Promise<string | null> {
   try {
     const ct = resp.headers.get('content-type') || '';
@@ -243,11 +233,8 @@ async function safeMessage(resp: Response): Promise<string | null> {
   }
 }
 
-/** ── Helpers for content-based validation & preprocessing ───────────────── */
-
-/** Load image safely (no experimental options) */
+// Load image (createImageBitmap path first; server will still rotate with EXIF if needed)
 async function loadImageOriented(file: File): Promise<HTMLImageElement> {
-  // Modern path: createImageBitmap (widely supported)
   if ('createImageBitmap' in window) {
     try {
       const bitmap = await createImageBitmap(file as any);
@@ -257,7 +244,6 @@ async function loadImageOriented(file: File): Promise<HTMLImageElement> {
       const ctx = canvas.getContext('2d')!;
       ctx.drawImage(bitmap, 0, 0);
       const url = canvas.toDataURL('image/jpeg', 0.92);
-
       const img = new Image();
       await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve();
@@ -265,12 +251,8 @@ async function loadImageOriented(file: File): Promise<HTMLImageElement> {
         img.src = url;
       });
       return img;
-    } catch {
-      // fall through to legacy path
-    }
+    } catch { /* fall through */ }
   }
-
-  // Legacy path
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -279,7 +261,7 @@ async function loadImageOriented(file: File): Promise<HTMLImageElement> {
   });
 }
 
-/** Downscale to MAX_SIDE while keeping aspect ratio */
+// Fit to MAX_SIDE
 function imageFitToMaxSide(image: HTMLImageElement, maxSide: number): HTMLCanvasElement {
   const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
   const w = Math.max(1, Math.round(image.width * scale));
@@ -292,10 +274,16 @@ function imageFitToMaxSide(image: HTMLImageElement, maxSide: number): HTMLCanvas
   return canvas;
 }
 
-/** Convert an <img> or canvas to grayscale DataURL (JPEG) */
+// Grayscale to Data URL
 async function toGrayscale(imgOrCanvas: HTMLImageElement | HTMLCanvasElement): Promise<string> {
-  const w = (imgOrCanvas as HTMLCanvasElement).width || (imgOrCanvas as HTMLImageElement).naturalWidth || (imgOrCanvas as HTMLImageElement).width;
-  const h = (imgOrCanvas as HTMLCanvasElement).height || (imgOrCanvas as HTMLImageElement).naturalHeight || (imgOrCanvas as HTMLImageElement).height;
+  const w =
+    (imgOrCanvas as HTMLCanvasElement).width ||
+    (imgOrCanvas as HTMLImageElement).naturalWidth ||
+    (imgOrCanvas as HTMLImageElement).width;
+  const h =
+    (imgOrCanvas as HTMLCanvasElement).height ||
+    (imgOrCanvas as HTMLImageElement).naturalHeight ||
+    (imgOrCanvas as HTMLImageElement).height;
 
   const canvas = document.createElement('canvas');
   canvas.width = w;
@@ -313,7 +301,7 @@ async function toGrayscale(imgOrCanvas: HTMLImageElement | HTMLCanvasElement): P
   return canvas.toDataURL('image/jpeg', 0.9);
 }
 
-/** Ultrasound-like heuristic: edge density on a small grayscale downscale */
+// Heuristic validator
 async function validateUltrasound(image: HTMLImageElement): Promise<boolean> {
   const w = VALIDATOR_SIZE, h = VALIDATOR_SIZE;
   const canvas = document.createElement('canvas');
@@ -324,14 +312,14 @@ async function validateUltrasound(image: HTMLImageElement): Promise<boolean> {
   const imgData = ctx.getImageData(0, 0, w, h);
   const data = imgData.data;
 
-  // quick grayscale in-place
+  // grayscale in-place
   for (let i = 0; i < data.length; i += 4) {
     const y = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
     data[i] = data[i + 1] = data[i + 2] = y;
   }
   ctx.putImageData(imgData, 0, 0);
 
-  // simple gradient-based edge count
+  // simple gradient edge density
   const lumAt = (x: number, y: number) => data[(y * w + x) * 4];
   let edges = 0;
   for (let yy = 0; yy < h - 1; yy++) {
@@ -344,4 +332,24 @@ async function validateUltrasound(image: HTMLImageElement): Promise<boolean> {
   }
   const edgeDensity = edges / (w * h);
   return edgeDensity > EDGE_THRESHOLD;
+}
+
+/* ---- Sticky-by-image helpers (hash + cache) ---- */
+async function dataURLToArrayBuffer(dataUrl: string): Promise<ArrayBuffer> {
+  const res = await fetch(dataUrl);
+  return await res.arrayBuffer();
+}
+async function sha256Hex(ab: ArrayBuffer): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', ab);
+  const bytes = new Uint8Array(hash);
+  return [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function cacheGet(hash: string): Result | null {
+  try {
+    const raw = localStorage.getItem(`result:${hash}`);
+    return raw ? (JSON.parse(raw) as Result) : null;
+  } catch { return null; }
+}
+function cacheSet(hash: string, res: Result) {
+  try { localStorage.setItem(`result:${hash}`, JSON.stringify(res)); } catch {}
 }
