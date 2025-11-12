@@ -80,7 +80,7 @@ export default function BabyNamesPage() {
       list = list.filter(n =>
         n.name.toLowerCase().includes(q) ||
         n.meaning.toLowerCase().includes(q) ||
-        (n.altSpellings || []).some(a => a.toLowerCase().includes(q))
+        (n.altSpellings || []).some((a: string) => a.toLowerCase().includes(q))
       );
     }
 
