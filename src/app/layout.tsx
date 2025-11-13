@@ -8,14 +8,20 @@ export const metadata: Metadata = {
   description:
     'A playful, privacy-first experience that offers a fun AI-assisted gender guess from an ultrasound. Not medical advice.',
   robots: { index: true, follow: true },
+  icons: {
+    icon: '/favicon.svg',           // primary favicon
+    shortcut: '/favicon.svg',       // ensures browser fallback
+    apple: '/favicon.svg',          // iOS home-screen icon
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const gaId = process.env.NEXT_PUBLIC_GA_ID; // exposed at build time
+  const gaId = process.env.NEXT_PUBLIC_GA_ID;
+
   return (
     <html lang="en">
       <body>
-        <GA id={gaId} />
+        {gaId && <GA id={gaId} />}
         <DisclaimerBanner />
         {children}
       </body>

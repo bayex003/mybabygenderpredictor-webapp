@@ -1,0 +1,18 @@
+<svg width="260" height="36" viewBox="0 0 260 36" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="260" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5EAaff"/>
+      <stop offset="0.5" stop-color="#9B80FF"/>
+      <stop offset="1" stop-color="#FF7BC8"/>
+    </linearGradient>
+  </defs>
+  <!-- round icon -->
+  <circle cx="18" cy="18" r="14" fill="#5EAaff"/>
+  <circle cx="14.5" cy="16" r="1.8" fill="white"/>
+  <circle cx="21.5" cy="16" r="1.8" fill="white"/>
+  <path d="M12 22c2.5 2 5.5 2 8 0" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <!-- wordmark (kept inside a wide viewBox so it never clips) -->
+  <text x="40" y="24" font-family="Poppins,ui-sans-serif" font-weight="600" font-size="16" fill="url(#g)">
+    My Baby Gender Predictor
+  </text>
+</svg>
