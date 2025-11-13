@@ -1,7 +1,12 @@
 'use client';
 
-import React, { useEffect, useMemo, useState, type ChangeEvent } from 'react';
-import { NAMES, type NameEntry } from '../../data/names';
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+} from 'react';
+import type { NameEntry } from '../../data/names';
 
 type GenderFilter = 'any' | 'boy' | 'girl' | 'unisex';
 type SortKey = 'az' | 'za' | 'lengthAsc' | 'lengthDesc';
@@ -9,6 +14,52 @@ type SortKey = 'az' | 'za' | 'lengthAsc' | 'lengthDesc';
 const PAGE_SIZE = 60;
 
 export default function BabyNamesPage() {
+  // ---------- Data from Supabase ----------
+  const [names, setNames] = useState<NameEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        setLoading(true);
+        setLoadError(null);
+
+        const res = await fetch('/api/names');
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || 'Failed to fetch names');
+        }
+
+        const body = (await res.json()) as { data?: NameEntry[]; error?: string };
+        if (body.error) {
+          throw new Error(body.error);
+        }
+
+        if (!cancelled) {
+          setNames(body.data ?? []);
+        }
+      } catch (err: any) {
+        console.error('[baby-names] fetch error:', err);
+        if (!cancelled) {
+          setLoadError(err?.message || 'Unable to load names right now.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // ---------- Browse filters ----------
   const [query, setQuery] = useState('');
   const [gender, setGender] = useState<GenderFilter>('any');
@@ -56,8 +107,8 @@ export default function BabyNamesPage() {
 
   // ---------- Derived options ----------
   const ORIGINS = useMemo(
-    () => Array.from(new Set(NAMES.map((n) => n.origin))).sort(),
-    []
+    () => Array.from(new Set(names.map((n) => n.origin))).sort(),
+    [names]
   );
   const LETTERS = useMemo(
     () => ['any', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')],
@@ -65,8 +116,8 @@ export default function BabyNamesPage() {
   );
 
   const TRENDING = useMemo<NameEntry[]>(
-    () => [...NAMES].slice(0, Math.min(12, NAMES.length)),
-    []
+    () => names.slice(0, Math.min(12, names.length)),
+    [names]
   );
 
   const POPULAR_ORIGINS = useMemo(
@@ -76,7 +127,7 @@ export default function BabyNamesPage() {
 
   // ---------- Main list filter + sort ----------
   const filtered = useMemo(() => {
-    let list = NAMES.slice();
+    let list = names.slice();
 
     if (gender !== 'any') {
       list = list.filter((n) => n.gender === gender);
@@ -127,7 +178,7 @@ export default function BabyNamesPage() {
     }
 
     return list;
-  }, [gender, origin, startsWith, query, sort]);
+  }, [names, gender, origin, startsWith, query, sort]);
 
   // ---------- Pagination ----------
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -165,7 +216,7 @@ export default function BabyNamesPage() {
   const [genError, setGenError] = useState<string | null>(null);
 
   const handleGenerate = () => {
-    let candidates = NAMES.slice();
+    let candidates = names.slice();
 
     if (genGender !== 'any') {
       candidates = candidates.filter((n) => n.gender === genGender);
@@ -208,6 +259,7 @@ export default function BabyNamesPage() {
     setGenerated(picks);
   };
 
+  // ---------- Render ----------
   return (
     <div className="min-h-screen bg-gradient-to-b from-white via-[#fdfaff] to-[#faf7ff] text-gray-800">
       <div className="mx-auto max-w-6xl px-4 py-10">
@@ -225,6 +277,17 @@ export default function BabyNamesPage() {
 
             {/* SEARCH + MAIN FILTERS */}
             <div className="mt-5 rounded-2xl bg-white shadow-soft border border-gray-100 p-4 flex flex-col gap-3">
+              {loading && (
+                <p className="text-xs text-gray-500">
+                  Loading names…
+                </p>
+              )}
+              {loadError && (
+                <p className="text-xs text-rose-600">
+                  {loadError}
+                </p>
+              )}
+
               <div className="flex flex-col md:flex-row gap-3">
                 <input
                   aria-label="Search by name or meaning"
@@ -232,12 +295,14 @@ export default function BabyNamesPage() {
                   placeholder="Search name or meaning (e.g. joy, light, strong)…"
                   value={query}
                   onChange={onFilterChange(setQuery)}
+                  disabled={loading || !!loadError}
                 />
                 <select
                   aria-label="Gender filter"
                   className="rounded-xl border border-gray-200 px-3 py-2 text-sm bg-white"
                   value={gender}
                   onChange={onFilterChange<GenderFilter>(setGender)}
+                  disabled={loading || !!loadError}
                 >
                   <option value="any">Any gender</option>
                   <option value="boy">Boy</option>
@@ -249,6 +314,7 @@ export default function BabyNamesPage() {
                   className="rounded-xl border border-gray-200 px-3 py-2 text-sm bg-white"
                   value={sort}
                   onChange={onFilterChange<SortKey>(setSort)}
+                  disabled={loading || !!loadError}
                 >
                   <option value="az">A → Z</option>
                   <option value="za">Z → A</option>
@@ -265,6 +331,7 @@ export default function BabyNamesPage() {
                     className="rounded-xl border border-gray-200 px-2 py-1 bg-white"
                     value={origin}
                     onChange={onFilterChange<string>(setOrigin)}
+                    disabled={loading || !!loadError}
                   >
                     <option value="any">Any origin</option>
                     {ORIGINS.map((o) => (
@@ -281,6 +348,7 @@ export default function BabyNamesPage() {
                     className="rounded-xl border border-gray-200 px-2 py-1 bg-white"
                     value={startsWith}
                     onChange={onFilterChange<string>(setStartsWith)}
+                    disabled={loading || !!loadError}
                   >
                     {LETTERS.map((l) => (
                       <option key={l} value={l}>
@@ -293,6 +361,7 @@ export default function BabyNamesPage() {
                   type="button"
                   onClick={resetFilters}
                   className="ml-auto rounded-xl border border-gray-200 px-3 py-1 text-xs md:text-sm text-gray-600 hover:bg-gray-50"
+                  disabled={loading || !!loadError}
                 >
                   Reset filters
                 </button>
@@ -300,10 +369,18 @@ export default function BabyNamesPage() {
             </div>
 
             <p className="mt-3 text-xs md:text-sm text-gray-600">
-              Showing <b>{filtered.length}</b> of {NAMES.length} names
-              {filtered.length > PAGE_SIZE && (
-                <> · Page {pageSafe} of {totalPages}</>
-              )}
+              {loading
+                ? 'Loading names…'
+                : loadError
+                ? 'Names could not be loaded.'
+                : (
+                  <>
+                    Showing <b>{filtered.length}</b> of {names.length} names
+                    {filtered.length > PAGE_SIZE && (
+                      <> · Page {pageSafe} of {totalPages}</>
+                    )}
+                  </>
+                )}
             </p>
           </div>
 
@@ -376,6 +453,7 @@ export default function BabyNamesPage() {
                 onChange={(e) =>
                   setGenGender(e.target.value as GenderFilter)
                 }
+                disabled={loading || !!loadError}
               >
                 <option value="any">Any gender</option>
                 <option value="boy">Boy</option>
@@ -388,6 +466,7 @@ export default function BabyNamesPage() {
                 className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
                 value={genOrigin}
                 onChange={(e) => setGenOrigin(e.target.value)}
+                disabled={loading || !!loadError}
               >
                 <option value="any">Any origin</option>
                 {ORIGINS.map((o) => (
@@ -402,6 +481,7 @@ export default function BabyNamesPage() {
                 className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
                 value={genStartsWith}
                 onChange={(e) => setGenStartsWith(e.target.value)}
+                disabled={loading || !!loadError}
               >
                 {LETTERS.map((l) => (
                   <option key={l} value={l}>
@@ -414,6 +494,7 @@ export default function BabyNamesPage() {
                 type="button"
                 onClick={handleGenerate}
                 className="rounded-xl bg-gradient-to-r from-[#5EAaff] to-[#FF7BC8] text-white px-4 py-2 font-medium text-xs md:text-sm shadow-md hover:opacity-90"
+                disabled={loading || !!loadError}
               >
                 Generate names
               </button>
@@ -487,12 +568,14 @@ export default function BabyNamesPage() {
         <section className="grid gap-8 lg:grid-cols-[2.2fr,1.2fr] items-start">
           {/* Results */}
           <div>
-            {pageItems.length === 0 ? (
+            {pageItems.length === 0 && !loading && !loadError ? (
               <div className="rounded-2xl bg-white border border-gray-100 shadow-soft p-6 text-center text-sm text-gray-600">
                 No names match these filters yet. Try clearing the search or picking a different
                 origin.
               </div>
-            ) : (
+            ) : null}
+
+            {pageItems.length > 0 && (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {pageItems.map((n) => {
                   const isFav = favs.includes(n.name);
