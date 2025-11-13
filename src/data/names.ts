@@ -1,4 +1,14 @@
-export const NAMES = [
+// src/data/names.ts
+
+export type NameEntry = {
+  name: string;
+  gender: 'boy' | 'girl' | 'unisex';
+  origin: string;
+  meaning: string;
+  altSpellings?: string[];
+};
+
+export const NAMES: NameEntry[] = [
   // Yoruba
   { name: 'Adebayo', gender: 'boy', origin: 'Yoruba', meaning: 'The crown meets joy' },
   { name: 'Ayomide', gender: 'unisex', origin: 'Yoruba', meaning: 'My joy has come' },
@@ -11,7 +21,7 @@ export const NAMES = [
   { name: 'Zayd', gender: 'boy', origin: 'Arabic', meaning: 'Growth, abundance', altSpellings: ['Zaid'] },
   { name: 'Iman', gender: 'unisex', origin: 'Arabic', meaning: 'Faith' },
 
-  // English / Irish
+  // English / Scottish / Irish
   { name: 'Oliver', gender: 'boy', origin: 'English', meaning: 'Olive tree' },
   { name: 'Isla', gender: 'girl', origin: 'Scottish', meaning: 'Island' },
   { name: 'Aoife', gender: 'girl', origin: 'Irish', meaning: 'Beauty, radiance' },
@@ -37,7 +47,7 @@ export const NAMES = [
   { name: 'Hana', gender: 'girl', origin: 'Japanese', meaning: 'Flower' },
   { name: 'Ren', gender: 'unisex', origin: 'Japanese', meaning: 'Lotus; love' },
 
-  // Arabic/North African
+  // Arabic / North African
   { name: 'Amir', gender: 'boy', origin: 'Arabic', meaning: 'Prince; leader' },
   { name: 'Maya', gender: 'girl', origin: 'Various', meaning: 'Water; illusion; mother' },
 
@@ -71,4 +81,4 @@ export const NAMES = [
   { name: 'Yara', gender: 'girl', origin: 'Arabic', meaning: 'Small butterfly' },
   { name: 'Ezekiel', gender: 'boy', origin: 'Hebrew', meaning: 'God strengthens' },
   { name: 'Amirra', gender: 'girl', origin: 'Arabic', meaning: 'Princess', altSpellings: ['Amira'] },
-] satisfies NameEntry[] as unknown as NameEntry[];
+];
