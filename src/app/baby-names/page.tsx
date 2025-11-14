@@ -6,6 +6,7 @@ import React, {
   useState,
   type ChangeEvent,
 } from 'react';
+import Nav from '../components/Nav';
 import type { NameEntry } from '../../data/names';
 
 type GenderFilter = 'any' | 'boy' | 'girl' | 'unisex';
@@ -14,13 +15,16 @@ type SortKey = 'az' | 'za' | 'lengthAsc' | 'lengthDesc';
 const PAGE_SIZE = 60;
 
 export default function BabyNamesPage() {
-  // ---------- Data from API (Supabase-backed) ----------
+  // --------- API-backed data for search results ----------
   const [names, setNames] = useState<NameEntry[]>([]);
   const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // ---------- Browse filters ----------
+  // Only fetch results after the user has interacted
+  const [hasInteracted, setHasInteracted] = useState(false);
+
+  // --------- Filters / search state ----------
   const [query, setQuery] = useState('');
   const [gender, setGender] = useState<GenderFilter>('any');
   const [origin, setOrigin] = useState<string>('any');
@@ -28,7 +32,7 @@ export default function BabyNamesPage() {
   const [sort, setSort] = useState<SortKey>('az');
   const [page, setPage] = useState(1);
 
-  // ---------- Favourites ----------
+  // --------- Favourites ----------
   const [favs, setFavs] = useState<string[]>([]);
 
   useEffect(() => {
@@ -65,8 +69,39 @@ export default function BabyNamesPage() {
     }
   };
 
-  // ---------- Fetch from /api/names whenever filters/page change ----------
+  // --------- TRENDING (small, always visible) ----------
+  const [trending, setTrending] = useState<NameEntry[]>([]);
+
   useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const loadTrending = async () => {
+      try {
+        const res = await fetch('/api/names?page=1&pageSize=12', {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as { data?: NameEntry[] };
+        if (!cancelled && body.data) {
+          setTrending(body.data);
+        }
+      } catch {
+        // silent – trending is nice-to-have
+      }
+    };
+
+    loadTrending();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, []);
+
+  // --------- Fetch search results when filters change & user has interacted ----------
+  useEffect(() => {
+    if (!hasInteracted) return;
+
     let cancelled = false;
     const controller = new AbortController();
 
@@ -95,8 +130,6 @@ export default function BabyNamesPage() {
         const body = (await res.json()) as {
           data?: NameEntry[];
           total?: number;
-          page?: number;
-          pageSize?: number;
           error?: string;
         };
 
@@ -108,7 +141,6 @@ export default function BabyNamesPage() {
 
         let list = (body.data ?? []).slice();
 
-        // Apply sort *within* the current page
         switch (sort) {
           case 'az':
             list.sort((a, b) => a.name.localeCompare(b.name));
@@ -119,13 +151,13 @@ export default function BabyNamesPage() {
           case 'lengthAsc':
             list.sort(
               (a, b) =>
-                a.name.length - b.name.length || a.name.localeCompare(b.name)
+                a.name.length - b.name.length || a.name.localeCompare(b.name),
             );
             break;
           case 'lengthDesc':
             list.sort(
               (a, b) =>
-                b.name.length - a.name.length || a.name.localeCompare(b.name)
+                b.name.length - a.name.length || a.name.localeCompare(b.name),
             );
             break;
         }
@@ -139,9 +171,7 @@ export default function BabyNamesPage() {
         setNames([]);
         setTotal(0);
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     };
 
@@ -151,41 +181,37 @@ export default function BabyNamesPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [page, gender, origin, startsWith, query, sort]);
+  }, [page, gender, origin, startsWith, query, sort, hasInteracted]);
 
-  // ---------- Derived options ----------
+  // --------- Derived options ----------
   const ORIGINS = useMemo(
-    () => Array.from(new Set(names.map((n) => n.origin))).sort(),
-    [names]
+    () => Array.from(new Set([...names, ...trending].map((n) => n.origin))).sort(),
+    [names, trending],
   );
   const LETTERS = useMemo(
     () => ['any', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')],
-    []
+    [],
   );
-
-  const TRENDING = useMemo<NameEntry[]>(
-    () => names.slice(0, Math.min(12, names.length)),
-    [names]
-  );
-
   const POPULAR_ORIGINS = useMemo(
     () => ORIGINS.slice(0, 6),
-    [ORIGINS]
+    [ORIGINS],
   );
 
-  // ---------- Pagination ----------
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const canGoPrev = page > 1;
   const canGoNext = page < totalPages;
 
+  const markInteracted = () => {
+    if (!hasInteracted) setHasInteracted(true);
+  };
+
   const onFilterChange = <T,>(
     setter: (value: T) => void,
-    extra?: () => void
   ) => {
     return (e: ChangeEvent<HTMLSelectElement | HTMLInputElement>) => {
-      setPage(1); // reset to first page when filters change
+      markInteracted();
+      setPage(1);
       setter(e.target.value as unknown as T);
-      if (extra) extra();
     };
   };
 
@@ -196,9 +222,13 @@ export default function BabyNamesPage() {
     setStartsWith('any');
     setSort('az');
     setPage(1);
+    setHasInteracted(false);
+    setNames([]);
+    setTotal(0);
+    setLoadError(null);
   };
 
-  // ---------- Baby Name Generator state ----------
+  // --------- Baby Name Generator (uses current results as pool) ----------
   const [genGender, setGenGender] = useState<GenderFilter>('any');
   const [genOrigin, setGenOrigin] = useState<string>('any');
   const [genStartsWith, setGenStartsWith] = useState<string>('any');
@@ -206,7 +236,8 @@ export default function BabyNamesPage() {
   const [genError, setGenError] = useState<string | null>(null);
 
   const handleGenerate = () => {
-    // Use the current page’s data as the candidate pool (filtered by the main filters)
+    markInteracted(); // counts as an interaction
+
     let candidates = names.slice();
 
     if (genGender !== 'any') {
@@ -214,13 +245,13 @@ export default function BabyNamesPage() {
     }
     if (genOrigin !== 'any') {
       candidates = candidates.filter(
-        (n) => n.origin.toLowerCase() === genOrigin.toLowerCase()
+        (n) => n.origin.toLowerCase() === genOrigin.toLowerCase(),
       );
     }
     if (genStartsWith !== 'any') {
       const letter = genStartsWith.toUpperCase();
       candidates = candidates.filter((n) =>
-        n.name.toUpperCase().startsWith(letter)
+        n.name.toUpperCase().startsWith(letter),
       );
     }
 
@@ -232,7 +263,6 @@ export default function BabyNamesPage() {
 
     setGenError(null);
 
-    // Pick up to 3 unique random suggestions
     const max = Math.min(3, candidates.length);
     const picks: NameEntry[] = [];
     const seen = new Set<string>();
@@ -250,75 +280,315 @@ export default function BabyNamesPage() {
     setGenerated(picks);
   };
 
-  // ---------- Render ----------
+  // hero search button handler – just marks interaction; query is already bound
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    markInteracted();
+    setPage(1);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-white via-[#fdfaff] to-[#faf7ff] text-gray-800">
-      <div className="mx-auto max-w-6xl px-4 py-10">
-        {/* HERO / INTRO */}
-        <section className="mb-8 grid gap-6 md:grid-cols-[2fr,1.3fr] items-start">
-          <div>
-            <h1 className="text-3xl md:text-4xl font-bold leading-tight">
-              Discover <span className="text-[#9B80FF]">Beautiful Baby Names</span>
-            </h1>
-            <p className="mt-3 text-gray-700 text-sm md:text-base">
-              Explore baby names from around the world with meanings and origins. Save your
-              favourites, filter by style and gender, and find names that feel like{' '}
-              <span className="font-semibold">the one</span>.
-            </p>
+      <Nav />
 
-            {/* SEARCH + MAIN FILTERS */}
-            <div className="mt-5 rounded-2xl bg-white shadow-soft border border-gray-100 p-4 flex flex-col gap-3">
-              {loading && (
-                <p className="text-xs text-gray-500">Loading names…</p>
-              )}
-              {loadError && (
-                <p className="text-xs text-rose-600">{loadError}</p>
-              )}
+      <main className="mx-auto max-w-6xl px-4 pb-10">
+        {/* HERO */}
+        <section className="mt-8 mb-8 rounded-3xl bg-gradient-to-r from-[#ffe5f5] via-[#fdf3ff] to-[#e6f3ff] px-4 py-10 md:py-14 text-center shadow-soft border border-white/60">
+          <h1 className="text-3xl md:text-4xl font-bold leading-tight text-gray-900">
+            Find the Perfect Name for Your{' '}
+            <span className="text-[#9B80FF]">Little One</span>
+          </h1>
+          <p className="mt-3 max-w-2xl mx-auto text-sm md:text-base text-gray-700">
+            Discover beautiful, meaningful baby names from around the world. Filter by
+            origin, gender, and more to find the perfect match.
+          </p>
 
-              <div className="flex flex-col md:flex-row gap-3">
-                <input
-                  aria-label="Search by name or meaning"
-                  className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring focus:ring-[#9B80FF]/30"
-                  placeholder="Search name or meaning (e.g. joy, light, strong)…"
-                  value={query}
-                  onChange={onFilterChange(setQuery)}
-                  disabled={loading || !!loadError}
-                />
-                <select
-                  aria-label="Gender filter"
-                  className="rounded-xl border border-gray-200 px-3 py-2 text-sm bg-white"
-                  value={gender}
-                  onChange={onFilterChange<GenderFilter>(setGender)}
-                  disabled={loading || !!loadError}
-                >
-                  <option value="any">Any gender</option>
-                  <option value="boy">Boy</option>
-                  <option value="girl">Girl</option>
-                  <option value="unisex">Unisex</option>
-                </select>
-                <select
-                  aria-label="Sort"
-                  className="rounded-xl border border-gray-200 px-3 py-2 text-sm bg-white"
-                  value={sort}
-                  onChange={onFilterChange<SortKey>(setSort)}
-                  disabled={loading || !!loadError}
-                >
-                  <option value="az">A → Z</option>
-                  <option value="za">Z → A</option>
-                  <option value="lengthAsc">Shortest first</option>
-                  <option value="lengthDesc">Longest first</option>
-                </select>
+          {/* Big search bar */}
+          <form
+            onSubmit={handleSearchSubmit}
+            className="mt-6 max-w-xl mx-auto flex items-center rounded-full bg-white shadow-md border border-gray-100 overflow-hidden"
+          >
+            <input
+              type="text"
+              value={query}
+              onChange={onFilterChange<string>(setQuery)}
+              placeholder="Search for baby names…"
+              className="flex-1 px-4 py-3 text-sm md:text-base outline-none"
+              aria-label="Search for baby names"
+            />
+            <button
+              type="submit"
+              className="px-5 py-3 bg-gradient-to-r from-[#5EAaff] to-[#FF7BC8] text-white text-sm md:text-base font-medium hover:opacity-90"
+            >
+              Search
+            </button>
+          </form>
+
+          {/* Filter row under hero */}
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-xs md:text-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-gray-600">Gender</span>
+              <select
+                className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
+                value={gender}
+                onChange={onFilterChange<GenderFilter>(setGender)}
+              >
+                <option value="any">All</option>
+                <option value="boy">Boys</option>
+                <option value="girl">Girls</option>
+                <option value="unisex">Unisex</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-gray-600">Origin</span>
+              <select
+                className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
+                value={origin}
+                onChange={onFilterChange<string>(setOrigin)}
+              >
+                <option value="any">All origins</option>
+                {ORIGINS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-gray-600">Starts with</span>
+              <select
+                className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
+                value={startsWith}
+                onChange={onFilterChange<string>(setStartsWith)}
+              >
+                {LETTERS.map((l) => (
+                  <option key={l} value={l}>
+                    {l === 'any' ? 'Any letter' : l}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-gray-600">Sort</span>
+              <select
+                className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
+                value={sort}
+                onChange={onFilterChange<SortKey>(setSort)}
+              >
+                <option value="az">A → Z</option>
+                <option value="za">Z → A</option>
+                <option value="lengthAsc">Shortest first</option>
+                <option value="lengthDesc">Longest first</option>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="rounded-xl border border-gray-200 px-3 py-2 text-xs md:text-sm text-gray-600 hover:bg-gray-50"
+            >
+              Reset
+            </button>
+          </div>
+        </section>
+
+        {/* MAIN LAYOUT: sidebar categories + content */}
+        <section className="grid gap-6 lg:grid-cols-[1.1fr,2.2fr] items-start">
+          {/* Sidebar – “Quick categories” */}
+          <aside className="rounded-2xl bg-white border border-gray-100 shadow-soft p-4 space-y-4">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800">
+                Quick categories
+              </h2>
+              <ul className="mt-2 space-y-1.5 text-xs text-gray-600">
+                <li>
+                  <button
+                    type="button"
+                    className="hover:text-[#9B80FF]"
+                    onClick={() => {
+                      markInteracted();
+                      setGender('any');
+                      setOrigin('any');
+                      setStartsWith('any');
+                      setQuery('');
+                      setPage(1);
+                    }}
+                  >
+                    All names
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    className="hover:text-[#9B80FF]"
+                    onClick={() => {
+                      markInteracted();
+                      setGender('girl');
+                      setOrigin('any');
+                      setStartsWith('any');
+                      setQuery('');
+                      setPage(1);
+                    }}
+                  >
+                    Popular girl names
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    className="hover:text-[#9B80FF]"
+                    onClick={() => {
+                      markInteracted();
+                      setGender('boy');
+                      setOrigin('any');
+                      setStartsWith('any');
+                      setQuery('');
+                      setPage(1);
+                    }}
+                  >
+                    Popular boy names
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    className="hover:text-[#9B80FF]"
+                    onClick={() => {
+                      markInteracted();
+                      setGender('unisex');
+                      setOrigin('any');
+                      setStartsWith('any');
+                      setQuery('');
+                      setPage(1);
+                    }}
+                  >
+                    Unisex names
+                  </button>
+                </li>
+              </ul>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800">
+                Name length
+              </h3>
+              <p className="mt-1 text-xs text-gray-500">
+                (Use sort & search above to explore short vs longer names.)
+              </p>
+            </div>
+
+            <div className="rounded-xl bg-gradient-to-r from-[#f6f3ff] to-[#fef6fb] border border-violet-100 p-3">
+              <h3 className="text-sm font-semibold text-gray-800">
+                How to use this page
+              </h3>
+              <ul className="mt-2 space-y-1.5 text-xs text-gray-600 list-disc list-inside">
+                <li>Search meanings like “joy”, “light”, or “strong”.</li>
+                <li>Filter by gender, origin, and first letter.</li>
+                <li>Tap “Save” to build a favourites list.</li>
+                <li>Use the generator for fresh ideas.</li>
+              </ul>
+            </div>
+          </aside>
+
+          {/* Right-hand main content: trending + generator + results */}
+          <div className="space-y-6">
+            {/* Trending names row */}
+            <section className="rounded-2xl bg-white border border-gray-100 shadow-soft p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                  Trending names
+                  <span className="text-[10px] uppercase tracking-wide text-[#9B80FF] bg-[#f3ecff] px-2 py-0.5 rounded-full">
+                    playful
+                  </span>
+                </h2>
               </div>
+              {trending.length === 0 ? (
+                <p className="text-xs text-gray-500">
+                  We&apos;re loading a few ideas for you…
+                </p>
+              ) : (
+                <div className="grid sm:grid-cols-3 gap-3">
+                  {trending.map((n) => {
+                    const isFav = favs.includes(n.name);
+                    return (
+                      <article
+                        key={`trending-${n.name}-${n.origin}-${n.gender}`}
+                        className="rounded-2xl border border-gray-100 bg-[#fdf7ff] p-3 text-xs flex flex-col gap-1"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h3 className="font-semibold text-gray-900">
+                              {n.name}
+                            </h3>
+                            <p className="text-[11px] uppercase tracking-wide text-gray-400">
+                              {n.origin} · {n.gender}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleFav(n.name)}
+                            className={`text-[11px] rounded-full border px-3 py-1 ${
+                              isFav
+                                ? 'bg-pink-50 border-pink-300 text-pink-700'
+                                : 'bg-white border-gray-200 text-gray-700'
+                            }`}
+                          >
+                            {isFav ? 'Saved' : 'Save'}
+                          </button>
+                        </div>
+                        <p className="text-[11px] text-gray-700 line-clamp-2">
+                          {n.meaning}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => copyName(n.name)}
+                          className="mt-1 text-[11px] rounded-xl border border-gray-200 px-3 py-1 hover:bg-gray-50 self-start"
+                        >
+                          Copy
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
 
-              <div className="flex flex-wrap gap-3 text-xs md:text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-gray-500">Origin</span>
+            {/* Baby Name Generator */}
+            <section className="rounded-2xl bg-white shadow-soft border border-gray-100 p-4 md:p-5">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-800">
+                    Try the Baby Name Generator
+                  </h2>
+                  <p className="mt-1 text-xs md:text-sm text-gray-600 max-w-xl">
+                    Choose a few preferences and we&apos;ll suggest some names based on your current
+                    filters and results.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-3 text-xs md:text-sm">
                   <select
-                    aria-label="Origin filter"
-                    className="rounded-xl border border-gray-200 px-2 py-1 bg-white"
-                    value={origin}
-                    onChange={onFilterChange<string>(setOrigin)}
-                    disabled={loading || !!loadError}
+                    aria-label="Generator gender"
+                    className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
+                    value={genGender}
+                    onChange={(e) =>
+                      setGenGender(e.target.value as GenderFilter)
+                    }
+                  >
+                    <option value="any">Any gender</option>
+                    <option value="boy">Boy</option>
+                    <option value="girl">Girl</option>
+                    <option value="unisex">Unisex</option>
+                  </select>
+
+                  <select
+                    aria-label="Generator origin"
+                    className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
+                    value={genOrigin}
+                    onChange={(e) => setGenOrigin(e.target.value)}
                   >
                     <option value="any">Any origin</option>
                     {ORIGINS.map((o) => (
@@ -327,15 +597,12 @@ export default function BabyNamesPage() {
                       </option>
                     ))}
                   </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-gray-500">Starts with</span>
+
                   <select
-                    aria-label="Starts with filter"
-                    className="rounded-xl border border-gray-200 px-2 py-1 bg-white"
-                    value={startsWith}
-                    onChange={onFilterChange<string>(setStartsWith)}
-                    disabled={loading || !!loadError}
+                    aria-label="Generator starting letter"
+                    className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
+                    value={genStartsWith}
+                    onChange={(e) => setGenStartsWith(e.target.value)}
                   >
                     {LETTERS.map((l) => (
                       <option key={l} value={l}>
@@ -343,386 +610,199 @@ export default function BabyNamesPage() {
                       </option>
                     ))}
                   </select>
-                </div>
-                <button
-                  type="button"
-                  onClick={resetFilters}
-                  className="ml-auto rounded-xl border border-gray-200 px-3 py-1 text-xs md:text-sm text-gray-600 hover:bg-gray-50"
-                  disabled={loading || !!loadError}
-                >
-                  Reset filters
-                </button>
-              </div>
-            </div>
 
-            <p className="mt-3 text-xs md:text-sm text-gray-600">
-              {loading
-                ? 'Loading names…'
-                : loadError
-                ? 'Names could not be loaded.'
-                : (
-                  <>
+                  <button
+                    type="button"
+                    onClick={handleGenerate}
+                    className="rounded-xl bg-gradient-to-r from-[#5EAaff] to-[#FF7BC8] text-white px-4 py-2 font-medium text-xs md:text-sm shadow-md hover:opacity-90"
+                    disabled={loading || !!loadError || !hasInteracted}
+                  >
+                    Generate names
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                {genError && (
+                  <p className="text-xs text-rose-600 mb-2">{genError}</p>
+                )}
+
+                {generated.length > 0 && (
+                  <div className="flex flex-wrap gap-3">
+                    {generated.map((n) => {
+                      const isFav = favs.includes(n.name);
+                      return (
+                        <article
+                          key={`gen-${n.name}-${n.origin}-${n.gender}`}
+                          className="bg-[#fdf7ff] border border-violet-100 rounded-2xl px-4 py-3 flex flex-col gap-1 text-xs md:text-sm"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <h3 className="font-semibold text-gray-800">
+                                {n.name}
+                              </h3>
+                              <p className="text-[11px] uppercase tracking-wide text-gray-400">
+                                {n.origin} · {n.gender}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => toggleFav(n.name)}
+                              className={`text-[11px] rounded-full border px-3 py-1 ${
+                                isFav
+                                  ? 'bg-pink-50 border-pink-300 text-pink-700'
+                                  : 'bg-white border-gray-200 text-gray-700'
+                              }`}
+                              aria-pressed={isFav}
+                            >
+                              {isFav ? 'Saved' : 'Save'}
+                            </button>
+                          </div>
+                          <p className="text-[11px] text-gray-700">
+                            {n.meaning}
+                          </p>
+                          <div className="mt-1 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => copyName(n.name)}
+                              className="text-[11px] rounded-xl border border-gray-200 px-3 py-1 hover:bg-gray-50"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!genError && generated.length === 0 && (
+                  <p className="text-[11px] text-gray-500">
+                    Start by searching or applying a filter, then use the generator for extra ideas.
+                  </p>
+                )}
+              </div>
+            </section>
+
+            {/* Search results */}
+            <section className="rounded-2xl bg-white border border-gray-100 shadow-soft p-4">
+              <div className="flex items-center justify-between mb-3 text-xs md:text-sm text-gray-600">
+                <span className="font-semibold">Search results</span>
+                {hasInteracted && !loading && !loadError && (
+                  <span>
                     Showing <b>{names.length}</b> of {total} names
                     {total > PAGE_SIZE && (
                       <> · Page {page} of {totalPages}</>
                     )}
-                  </>
+                  </span>
                 )}
-            </p>
-          </div>
-
-          {/* TRENDING + FAVOURITES */}
-          <aside className="rounded-2xl bg-white shadow-soft border border-gray-100 p-4 flex flex-col gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-                Trending names
-                <span className="text-[10px] uppercase tracking-wide text-[#9B80FF] bg-[#f3ecff] px-2 py-0.5 rounded-full">
-                  playful
-                </span>
-              </h2>
-              <p className="mt-1 text-xs text-gray-500">
-                A few names visitors often gravitate towards. Tap to copy and save for later.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {TRENDING.map((n) => (
-                  <button
-                    key={n.name}
-                    type="button"
-                    onClick={() => copyName(n.name)}
-                    className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs hover:bg-white"
-                  >
-                    {n.name}
-                  </button>
-                ))}
               </div>
-            </div>
 
-            <div className="border-top border-gray-100 pt-3">
-              <h3 className="text-sm font-semibold text-gray-800">Your favourites</h3>
-              {favs.length === 0 ? (
-                <p className="mt-1 text-xs text-gray-500">
-                  Tap “Save” on any name to build your list.
+              {!hasInteracted && (
+                <p className="text-xs text-gray-500">
+                  Start by searching or choosing a filter above to see names here.
                 </p>
-              ) : (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {favs.map((n) => (
-                    <span
-                      key={n}
-                      className="rounded-full border border-pink-200 bg-pink-50 px-3 py-1 text-xs text-pink-700"
-                    >
-                      {n}
-                    </span>
-                  ))}
-                </div>
               )}
-            </div>
-          </aside>
-        </section>
 
-        {/* BABY NAME GENERATOR */}
-        <section className="mb-8 rounded-2xl bg-white shadow-soft border border-gray-100 p-4 md:p-5">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-800">
-                Try the Baby Name Generator
-              </h2>
-              <p className="mt-1 text-xs md:text-sm text-gray-600 max-w-xl">
-                Choose a few preferences and we&apos;ll suggest some names for you to explore. You can
-                still refine and save favourites below.
-              </p>
-            </div>
+              {hasInteracted && loadError && (
+                <p className="text-xs text-rose-600">{loadError}</p>
+              )}
 
-            <div className="flex flex-wrap gap-3 text-xs md:text-sm">
-              <select
-                aria-label="Generator gender"
-                className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
-                value={genGender}
-                onChange={(e) =>
-                  setGenGender(e.target.value as GenderFilter)
-                }
-                disabled={loading || !!loadError}
-              >
-                <option value="any">Any gender</option>
-                <option value="boy">Boy</option>
-                <option value="girl">Girl</option>
-                <option value="unisex">Unisex</option>
-              </select>
+              {hasInteracted && loading && (
+                <p className="text-xs text-gray-500">Loading names…</p>
+              )}
 
-              <select
-                aria-label="Generator origin"
-                className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
-                value={genOrigin}
-                onChange={(e) => setGenOrigin(e.target.value)}
-                disabled={loading || !!loadError}
-              >
-                <option value="any">Any origin</option>
-                {ORIGINS.map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
+              {hasInteracted && !loading && !loadError && names.length === 0 && (
+                <p className="text-xs text-gray-500">
+                  No names match these filters yet. Try clearing the search or picking a different
+                  origin.
+                </p>
+              )}
 
-              <select
-                aria-label="Generator starting letter"
-                className="rounded-xl border border-gray-200 px-3 py-2 bg-white"
-                value={genStartsWith}
-                onChange={(e) => setGenStartsWith(e.target.value)}
-                disabled={loading || !!loadError}
-              >
-                {LETTERS.map((l) => (
-                  <option key={l} value={l}>
-                    {l === 'any' ? 'Any letter' : l}
-                  </option>
-                ))}
-              </select>
+              {names.length > 0 && (
+                <>
+                  <div className="mt-3 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {names.map((n) => {
+                      const isFav = favs.includes(n.name);
+                      return (
+                        <article
+                          key={`${n.name}-${n.origin}-${n.gender}`}
+                          className="bg-white rounded-2xl shadow-soft border border-gray-100 p-4 flex flex-col gap-2"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <h3 className="text-lg font-semibold">{n.name}</h3>
+                              <p className="text-[11px] uppercase tracking-wide text-gray-400">
+                                {n.origin} · {n.gender}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => toggleFav(n.name)}
+                              className={`text-xs rounded-full border px-3 py-1 ${
+                                isFav
+                                  ? 'bg-pink-50 border-pink-300 text-pink-700'
+                                  : 'bg-gray-50 border-gray-200 text-gray-700'
+                              }`}
+                              aria-pressed={isFav}
+                            >
+                              {isFav ? 'Saved' : 'Save'}
+                            </button>
+                          </div>
 
-              <button
-                type="button"
-                onClick={handleGenerate}
-                className="rounded-xl bg-gradient-to-r from-[#5EAaff] to-[#FF7BC8] text-white px-4 py-2 font-medium text-xs md:text-sm shadow-md hover:opacity-90"
-                disabled={loading || !!loadError}
-              >
-                Generate names
-              </button>
-            </div>
-          </div>
-
-          {/* Generated results */}
-          <div className="mt-4">
-            {genError && (
-              <p className="text-xs text-rose-600 mb-2">{genError}</p>
-            )}
-
-            {generated.length > 0 && (
-              <div className="flex flex-wrap gap-3">
-                {generated.map((n) => {
-                  const isFav = favs.includes(n.name);
-                  return (
-                    <article
-                      key={`gen-${n.name}-${n.origin}-${n.gender}`}
-                      className="bg-[#fdf7ff] border border-violet-100 rounded-2xl px-4 py-3 flex flex-col gap-1 text-xs md:text-sm"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h3 className="font-semibold text-gray-800">
-                            {n.name}
-                          </h3>
-                          <p className="text-[11px] uppercase tracking-wide text-gray-400">
-                            {n.origin} · {n.gender}
+                          <p className="text-xs text-gray-700 line-clamp-3">
+                            {n.meaning}
                           </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => toggleFav(n.name)}
-                          className={`text-[11px] rounded-full border px-3 py-1 ${
-                            isFav
-                              ? 'bg-pink-50 border-pink-300 text-pink-700'
-                              : 'bg-white border-gray-200 text-gray-700'
-                          }`}
-                          aria-pressed={isFav}
-                        >
-                          {isFav ? 'Saved' : 'Save'}
-                        </button>
-                      </div>
-                      <p className="text-[11px] text-gray-700">
-                        {n.meaning}
-                      </p>
-                      <div className="mt-1 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => copyName(n.name)}
-                          className="text-[11px] rounded-xl border border-gray-200 px-3 py-1 hover:bg-gray-50"
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
 
-            {!genError && generated.length === 0 && (
-              <p className="text-[11px] text-gray-500">
-                Tap &quot;Generate names&quot; to see some suggestions based on your choices.
-              </p>
-            )}
+                          {n.altSpellings?.length ? (
+                            <p className="text-[11px] text-gray-500">
+                              Also: {n.altSpellings.join(', ')}
+                            </p>
+                          ) : null}
+
+                          <div className="mt-1 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => copyName(n.name)}
+                              className="text-xs rounded-xl border border-gray-200 px-3 py-1 hover:bg-gray-50"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+
+                  {total > PAGE_SIZE && (
+                    <div className="mt-5 flex items-center justify-center gap-3 text-xs">
+                      <button
+                        type="button"
+                        disabled={!canGoPrev}
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        className="rounded-full border border-gray-200 px-3 py-1 disabled:opacity-40 disabled:cursor-default hover:bg-gray-50"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-gray-500">
+                        Page {page} of {totalPages}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={!canGoNext}
+                        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                        className="rounded-full border border-gray-200 px-3 py-1 disabled:opacity-40 disabled:cursor-default hover:bg-gray-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
           </div>
         </section>
-
-        {/* MAIN CONTENT: results + quick filters */}
-        <section className="grid gap-8 lg:grid-cols-[2.2fr,1.2fr] items-start">
-          {/* Results */}
-          <div>
-            {names.length === 0 && !loading && !loadError ? (
-              <div className="rounded-2xl bg-white border border-gray-100 shadow-soft p-6 text-center text-sm text-gray-600">
-                No names match these filters yet. Try clearing the search or picking a different
-                origin.
-              </div>
-            ) : null}
-
-            {names.length > 0 && (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {names.map((n) => {
-                  const isFav = favs.includes(n.name);
-                  return (
-                    <article
-                      key={`${n.name}-${n.origin}-${n.gender}`}
-                      className="bg-white rounded-2xl shadow-soft border border-gray-100 p-4 flex flex-col gap-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h3 className="text-lg font-semibold">{n.name}</h3>
-                          <p className="text-[11px] uppercase tracking-wide text-gray-400">
-                            {n.origin} · {n.gender}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => toggleFav(n.name)}
-                          className={`text-xs rounded-full border px-3 py-1 ${
-                            isFav
-                              ? 'bg-pink-50 border-pink-300 text-pink-700'
-                              : 'bg-gray-50 border-gray-200 text-gray-700'
-                          }`}
-                          aria-pressed={isFav}
-                        >
-                          {isFav ? 'Saved' : 'Save'}
-                        </button>
-                      </div>
-
-                      <p className="text-xs text-gray-700 line-clamp-3">
-                        {n.meaning}
-                      </p>
-
-                      {n.altSpellings?.length ? (
-                        <p className="text-[11px] text-gray-500">
-                          Also: {n.altSpellings.join(', ')}
-                        </p>
-                      ) : null}
-
-                      <div className="mt-1 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => copyName(n.name)}
-                          className="text-xs rounded-xl border border-gray-200 px-3 py-1 hover:bg-gray-50"
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Pagination */}
-            {total > PAGE_SIZE && (
-              <div className="mt-6 flex items-center justify-center gap-3 text-xs">
-                <button
-                  type="button"
-                  disabled={!canGoPrev}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="rounded-full border border-gray-200 px-3 py-1 disabled:opacity-40 disabled:cursor-default hover:bg-gray-50"
-                >
-                  Previous
-                </button>
-                <span className="text-gray-500">
-                  Page {page} of {totalPages}
-                </span>
-                <button
-                  type="button"
-                  disabled={!canGoNext}
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  className="rounded-full border border-gray-200 px-3 py-1 disabled:opacity-40 disabled:cursor-default hover:bg-gray-50"
-                >
-                  Next
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Side content: quick filters + help */}
-          <aside className="space-y-4">
-            <div className="rounded-2xl bg-white border border-gray-100 shadow-soft p-4">
-              <h2 className="text-sm font-semibold text-gray-800">Quick filters</h2>
-              <p className="mt-1 text-xs text-gray-500">
-                Jump straight into popular ways people browse names.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                <button
-                  type="button"
-                  className="rounded-full border border-gray-200 px-3 py-1 hover:bg-gray-50"
-                  onClick={() => {
-                    setGender('girl');
-                    setOrigin('any');
-                    setStartsWith('any');
-                    setQuery('');
-                    setPage(1);
-                  }}
-                >
-                  Girl names
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-gray-200 px-3 py-1 hover:bg-gray-50"
-                  onClick={() => {
-                    setGender('boy');
-                    setOrigin('any');
-                    setStartsWith('any');
-                    setQuery('');
-                    setPage(1);
-                  }}
-                >
-                  Boy names
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-gray-200 px-3 py-1 hover:bg-gray-50"
-                  onClick={() => {
-                    setGender('unisex');
-                    setOrigin('any');
-                    setStartsWith('any');
-                    setQuery('');
-                    setPage(1);
-                  }}
-                >
-                  Unisex names
-                </button>
-
-                {POPULAR_ORIGINS.map((o) => (
-                  <button
-                    key={o}
-                    type="button"
-                    className="rounded-full border border-gray-200 px-3 py-1 hover:bg-gray-50"
-                    onClick={() => {
-                      setOrigin(o);
-                      setGender('any');
-                      setStartsWith('any');
-                      setQuery('');
-                      setPage(1);
-                    }}
-                  >
-                    {o} names
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-gradient-to-r from-[#f6f3ff] to-[#fef6fb] border border-violet-100 shadow-soft p-4">
-              <h2 className="text-sm font-semibold text-gray-800">How to use this page</h2>
-              <ul className="mt-2 space-y-1.5 text-xs text-gray-600 list-disc list-inside">
-                <li>Use the search box for meanings like “joy”, “light”, or “strong”.</li>
-                <li>Filter by gender, origin, and first letter to narrow your list.</li>
-                <li>Tap “Save” to build your favourites list without creating an account.</li>
-                <li>Tap “Copy” to quickly share names with your partner or friends.</li>
-                <li>Use the generator above when you feel stuck and want fresh ideas.</li>
-              </ul>
-            </div>
-          </aside>
-        </section>
-      </div>
+      </main>
     </div>
   );
 }
