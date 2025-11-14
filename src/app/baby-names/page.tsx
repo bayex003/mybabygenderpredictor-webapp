@@ -14,51 +14,11 @@ type SortKey = 'az' | 'za' | 'lengthAsc' | 'lengthDesc';
 const PAGE_SIZE = 60;
 
 export default function BabyNamesPage() {
-  // ---------- Data from Supabase ----------
+  // ---------- Data from API (Supabase-backed) ----------
   const [names, setNames] = useState<NameEntry[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
-      try {
-        setLoading(true);
-        setLoadError(null);
-
-        const res = await fetch('/api/names');
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || 'Failed to fetch names');
-        }
-
-        const body = (await res.json()) as { data?: NameEntry[]; error?: string };
-        if (body.error) {
-          throw new Error(body.error);
-        }
-
-        if (!cancelled) {
-          setNames(body.data ?? []);
-        }
-      } catch (err: any) {
-        console.error('[baby-names] fetch error:', err);
-        if (!cancelled) {
-          setLoadError(err?.message || 'Unable to load names right now.');
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    load();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // ---------- Browse filters ----------
   const [query, setQuery] = useState('');
@@ -105,6 +65,94 @@ export default function BabyNamesPage() {
     }
   };
 
+  // ---------- Fetch from /api/names whenever filters/page change ----------
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const load = async () => {
+      try {
+        setLoading(true);
+        setLoadError(null);
+
+        const params = new URLSearchParams();
+        params.set('page', String(page));
+        params.set('pageSize', String(PAGE_SIZE));
+        params.set('gender', gender);
+        params.set('origin', origin);
+        params.set('startsWith', startsWith);
+        if (query.trim()) params.set('q', query.trim());
+
+        const res = await fetch(`/api/names?${params.toString()}`, {
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(text || 'Failed to fetch names');
+        }
+
+        const body = (await res.json()) as {
+          data?: NameEntry[];
+          total?: number;
+          page?: number;
+          pageSize?: number;
+          error?: string;
+        };
+
+        if (body.error) {
+          throw new Error(body.error);
+        }
+
+        if (cancelled) return;
+
+        let list = (body.data ?? []).slice();
+
+        // Apply sort *within* the current page
+        switch (sort) {
+          case 'az':
+            list.sort((a, b) => a.name.localeCompare(b.name));
+            break;
+          case 'za':
+            list.sort((a, b) => b.name.localeCompare(a.name));
+            break;
+          case 'lengthAsc':
+            list.sort(
+              (a, b) =>
+                a.name.length - b.name.length || a.name.localeCompare(b.name)
+            );
+            break;
+          case 'lengthDesc':
+            list.sort(
+              (a, b) =>
+                b.name.length - a.name.length || a.name.localeCompare(b.name)
+            );
+            break;
+        }
+
+        setNames(list);
+        setTotal(typeof body.total === 'number' ? body.total : list.length);
+      } catch (err: any) {
+        if (cancelled || err?.name === 'AbortError') return;
+        console.error('[baby-names] fetch error:', err);
+        setLoadError(err?.message || 'Unable to load names right now.');
+        setNames([]);
+        setTotal(0);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [page, gender, origin, startsWith, query, sort]);
+
   // ---------- Derived options ----------
   const ORIGINS = useMemo(
     () => Array.from(new Set(names.map((n) => n.origin))).sort(),
@@ -125,75 +173,17 @@ export default function BabyNamesPage() {
     [ORIGINS]
   );
 
-  // ---------- Main list filter + sort ----------
-  const filtered = useMemo(() => {
-    let list = names.slice();
-
-    if (gender !== 'any') {
-      list = list.filter((n) => n.gender === gender);
-    }
-
-    if (origin !== 'any') {
-      list = list.filter(
-        (n) => n.origin.toLowerCase() === origin.toLowerCase()
-      );
-    }
-
-    if (startsWith !== 'any') {
-      const letter = startsWith.toUpperCase();
-      list = list.filter((n) => n.name.toUpperCase().startsWith(letter));
-    }
-
-    if (query.trim()) {
-      const q = query.trim().toLowerCase();
-      list = list.filter(
-        (n) =>
-          n.name.toLowerCase().includes(q) ||
-          n.meaning.toLowerCase().includes(q) ||
-          (n.altSpellings || []).some((a: string) =>
-            a.toLowerCase().includes(q)
-          )
-      );
-    }
-
-    switch (sort) {
-      case 'az':
-        list.sort((a, b) => a.name.localeCompare(b.name));
-        break;
-      case 'za':
-        list.sort((a, b) => b.name.localeCompare(a.name));
-        break;
-      case 'lengthAsc':
-        list.sort(
-          (a, b) =>
-            a.name.length - b.name.length || a.name.localeCompare(b.name)
-        );
-        break;
-      case 'lengthDesc':
-        list.sort(
-          (a, b) =>
-            b.name.length - a.name.length || a.name.localeCompare(b.name)
-        );
-        break;
-    }
-
-    return list;
-  }, [names, gender, origin, startsWith, query, sort]);
-
   // ---------- Pagination ----------
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageSafe = Math.min(page, totalPages);
-  const pageItems = useMemo(
-    () => filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE),
-    [filtered, pageSafe]
-  );
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const canGoPrev = page > 1;
+  const canGoNext = page < totalPages;
 
   const onFilterChange = <T,>(
     setter: (value: T) => void,
     extra?: () => void
   ) => {
     return (e: ChangeEvent<HTMLSelectElement | HTMLInputElement>) => {
-      setPage(1);
+      setPage(1); // reset to first page when filters change
       setter(e.target.value as unknown as T);
       if (extra) extra();
     };
@@ -216,6 +206,7 @@ export default function BabyNamesPage() {
   const [genError, setGenError] = useState<string | null>(null);
 
   const handleGenerate = () => {
+    // Use the current page’s data as the candidate pool (filtered by the main filters)
     let candidates = names.slice();
 
     if (genGender !== 'any') {
@@ -278,14 +269,10 @@ export default function BabyNamesPage() {
             {/* SEARCH + MAIN FILTERS */}
             <div className="mt-5 rounded-2xl bg-white shadow-soft border border-gray-100 p-4 flex flex-col gap-3">
               {loading && (
-                <p className="text-xs text-gray-500">
-                  Loading names…
-                </p>
+                <p className="text-xs text-gray-500">Loading names…</p>
               )}
               {loadError && (
-                <p className="text-xs text-rose-600">
-                  {loadError}
-                </p>
+                <p className="text-xs text-rose-600">{loadError}</p>
               )}
 
               <div className="flex flex-col md:flex-row gap-3">
@@ -375,9 +362,9 @@ export default function BabyNamesPage() {
                 ? 'Names could not be loaded.'
                 : (
                   <>
-                    Showing <b>{filtered.length}</b> of {names.length} names
-                    {filtered.length > PAGE_SIZE && (
-                      <> · Page {pageSafe} of {totalPages}</>
+                    Showing <b>{names.length}</b> of {total} names
+                    {total > PAGE_SIZE && (
+                      <> · Page {page} of {totalPages}</>
                     )}
                   </>
                 )}
@@ -568,16 +555,16 @@ export default function BabyNamesPage() {
         <section className="grid gap-8 lg:grid-cols-[2.2fr,1.2fr] items-start">
           {/* Results */}
           <div>
-            {pageItems.length === 0 && !loading && !loadError ? (
+            {names.length === 0 && !loading && !loadError ? (
               <div className="rounded-2xl bg-white border border-gray-100 shadow-soft p-6 text-center text-sm text-gray-600">
                 No names match these filters yet. Try clearing the search or picking a different
                 origin.
               </div>
             ) : null}
 
-            {pageItems.length > 0 && (
+            {names.length > 0 && (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {pageItems.map((n) => {
+                {names.map((n) => {
                   const isFav = favs.includes(n.name);
                   return (
                     <article
@@ -631,22 +618,22 @@ export default function BabyNamesPage() {
             )}
 
             {/* Pagination */}
-            {filtered.length > PAGE_SIZE && (
+            {total > PAGE_SIZE && (
               <div className="mt-6 flex items-center justify-center gap-3 text-xs">
                 <button
                   type="button"
-                  disabled={pageSafe <= 1}
+                  disabled={!canGoPrev}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   className="rounded-full border border-gray-200 px-3 py-1 disabled:opacity-40 disabled:cursor-default hover:bg-gray-50"
                 >
                   Previous
                 </button>
                 <span className="text-gray-500">
-                  Page {pageSafe} of {totalPages}
+                  Page {page} of {totalPages}
                 </span>
                 <button
                   type="button"
-                  disabled={pageSafe >= totalPages}
+                  disabled={!canGoNext}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                   className="rounded-full border border-gray-200 px-3 py-1 disabled:opacity-40 disabled:cursor-default hover:bg-gray-50"
                 >
