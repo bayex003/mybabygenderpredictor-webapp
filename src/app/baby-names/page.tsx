@@ -6,7 +6,7 @@ import React, {
   useState,
   type ChangeEvent,
 } from 'react';
-import Nav from '../components/Nav';
+import Nav from '../../components/Nav';
 import type { NameEntry } from '../../data/names';
 
 type GenderFilter = 'any' | 'boy' | 'girl' | 'unisex';
