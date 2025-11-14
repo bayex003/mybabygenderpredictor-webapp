@@ -1,4 +1,3 @@
-cat > src/components/Nav.tsx << 'EOF'
 'use client';
 
 import React from 'react';
@@ -45,11 +44,8 @@ export default function Nav() {
         </a>
         {/* Baby Names temporarily hidden */}
         {/* <a href="/baby-names" className="hover:underline">Baby Names</a> */}
-        {/* We also removed "Why us", Privacy, Terms from the top nav on purpose */}
+        {/* "Why us" + top-right CTA removed for now */}
       </div>
-
-      {/* Top-right CTA removed for now */}
     </nav>
   );
 }
-EOF
